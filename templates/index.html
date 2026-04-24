@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+  <title>AL5B Arm Control</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      margin: 0; padding: 14px;
+      background: #1a1d23; color: #e8ecf1;
+      touch-action: manipulation;
+    }
+    h1 { margin: 0 0 12px; font-size: 20px; font-weight: 600; }
+    h2 { margin: 4px 0 8px; font-size: 14px; letter-spacing: 0.08em;
+         text-transform: uppercase; color: #8a93a6; font-weight: 600; }
+    .panel {
+      background: #242830; border-radius: 10px; padding: 16px;
+      margin-bottom: 14px; max-width: 560px;
+    }
+    button {
+      background: #2f6feb; color: white; border: 0; padding: 12px 16px;
+      border-radius: 8px; font-size: 14px; font-weight: 600; cursor: pointer;
+      touch-action: manipulation;
+    }
+    button.secondary { background: #434a57; }
+    button.danger { background: #dc3545; }
+    button:active { transform: scale(0.97); }
+    .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+    label.slider {
+      display: block; margin: 14px 0 4px; font-size: 13px; color: #c2cadb;
+    }
+    .slider-row { display: flex; align-items: center; gap: 8px; }
+    input[type=range] {
+      flex: 1; height: 34px; -webkit-appearance: none; appearance: none;
+      background: transparent;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 6px; background: #3d4450; border-radius: 3px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none;
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #2f6feb; margin-top: -9px; cursor: pointer;
+    }
+    input[type=range]::-moz-range-track {
+      height: 6px; background: #3d4450; border-radius: 3px;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 24px; height: 24px; border-radius: 50%;
+      background: #2f6feb; border: 0; cursor: pointer;
+    }
+    .value {
+      min-width: 72px; font-family: ui-monospace, monospace; font-size: 13px;
+      color: #8adbff; text-align: right;
+    }
+    .pill {
+      display: inline-block; padding: 2px 10px; border-radius: 12px;
+      background: #2f4f3f; color: #7cffb2; font-size: 12px; font-weight: 600;
+      margin-left: 8px; vertical-align: middle;
+    }
+    .pill.busy { background: #4f3f2f; color: #ffc77c; }
+    .status {
+      font-family: ui-monospace, monospace; font-size: 12px;
+      color: #8a93a6; margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <h1>AL5B Arm Control<span id="busyPill" class="pill">idle</span></h1>
+
+  <div class="panel">
+    <h2>Buttons</h2>
+    <div class="btn-row">
+      <button id="center" class="secondary">Center all @ 1500</button>
+      <button id="home">Home (IK)</button>
+      <button id="demo">Pick &amp; Place</button>
+      <button id="stop" class="danger">STOP</button>
+    </div>
+    <div class="status" id="status">ready</div>
+  </div>
+
+  <div class="panel">
+    <h2>Per-joint sliders</h2>
+    <div id="joints"></div>
+  </div>
+
+<script>
+const joints = [
+  {label: "CH0  Base",     ch: 0, min: 700,  max: 2300, val: 1500},
+  {label: "CH1  Shoulder", ch: 1, min: 900,  max: 2100, val: 1500},
+  {label: "CH2  Elbow",    ch: 2, min: 700,  max: 2300, val: 1500},
+  {label: "CH3  Wrist",    ch: 3, min: 700,  max: 2300, val: 1500},
+  {label: "CH4  Gripper",  ch: 4, min: 1000, max: 2000, val: 1500},
+];
+
+const jointsDiv = document.getElementById("joints");
+const sliderByCh = {};
+
+joints.forEach(function (j) {
+  const wrap = document.createElement("div");
+  wrap.innerHTML =
+    '<label class="slider">' + j.label + '</label>' +
+    '<div class="slider-row">' +
+    '  <input type="range" min="' + j.min + '" max="' + j.max +
+         '" value="' + j.val + '" step="10" data-ch="' + j.ch + '"/>' +
+    '  <span class="value">' + j.val + '</span>' +
+    '</div>';
+  jointsDiv.appendChild(wrap);
+  const slider = wrap.querySelector("input");
+  const label  = wrap.querySelector(".value");
+  sliderByCh[j.ch] = { slider: slider, label: label };
+
+  // Send on input (live drag) - browser throttles this naturally to ~60 Hz.
+  // We pass a short T value so the SSC-32 reacts smoothly.
+  slider.oninput = function () {
+    label.textContent = slider.value;
+    fetch("/api/joint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        channel: j.ch,
+        pulse: parseInt(slider.value, 10),
+        time_ms: 150
+      }),
+    }).catch(function () {});
+  };
+});
+
+function setAllSliders(pulseMap) {
+  Object.keys(pulseMap).forEach(function (ch) {
+    const s = sliderByCh[ch];
+    if (!s) return;
+    s.slider.value = pulseMap[ch];
+    s.label.textContent = pulseMap[ch];
+  });
+}
+
+document.getElementById("center").onclick = function () {
+  fetch("/api/center", { method: "POST" })
+    .then(function () { setAllSliders({0:1500,1:1500,2:1500,3:1500,4:1500}); });
+};
+
+document.getElementById("home").onclick = function () {
+  fetch("/api/home", { method: "POST" })
+    .then(function (r) { return r.json(); })
+    .then(function (resp) {
+      const el = document.getElementById("status");
+      el.textContent = resp.ok ? "home reached" : "home target unreachable (check calibration)";
+    });
+};
+
+document.getElementById("demo").onclick = function () {
+  fetch("/api/demo", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({})
+  });
+};
+
+document.getElementById("stop").onclick = function () {
+  fetch("/api/stop", { method: "POST" });
+};
+
+// Periodically pull state so the sliders track when the server moves the arm
+// (e.g. during a pick-and-place demo) and the busy pill stays accurate.
+setInterval(async function () {
+  try {
+    const r = await fetch("/api/state");
+    const s = await r.json();
+    const pill = document.getElementById("busyPill");
+    if (s.busy) {
+      pill.textContent = "running demo";
+      pill.classList.add("busy");
+      // During demo, update sliders from server state (don't fight the user
+      // when they're dragging - only update sliders the user isn't touching).
+      if (s.pulses) setAllSliders(s.pulses);
+    } else {
+      pill.textContent = "idle";
+      pill.classList.remove("busy");
+    }
+  } catch (e) {}
+}, 500);
+</script>
+</body>
+</html>

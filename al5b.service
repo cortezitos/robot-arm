@@ -1,0 +1,38 @@
+; systemd unit file for auto-starting the AL5B webapp on boot.
+;
+; Install:
+;     sudo cp al5b.service /etc/systemd/system/al5b.service
+;     # edit User= and WorkingDirectory= below if your Pi user isn't 'pi'
+;     sudo systemctl daemon-reload
+;     sudo systemctl enable al5b     # start on every boot
+;     sudo systemctl start al5b      # start right now
+;
+; Check status / logs:
+;     systemctl status al5b
+;     journalctl -u al5b -f
+;
+; Stop auto-start:
+;     sudo systemctl disable al5b
+;     sudo systemctl stop al5b
+;
+; Note: systemd does not actually read comments starting with ';' on the unit
+; body — those are only legal in [Section] bodies. The real unit begins below.
+
+[Unit]
+Description=AL5B arm web controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=dialout
+WorkingDirectory=/home/pi/al5b_pi_project
+ExecStart=/usr/bin/python3 /home/pi/al5b_pi_project/webapp.py --no-wiggle
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
