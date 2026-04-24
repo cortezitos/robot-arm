@@ -238,4 +238,31 @@ def main():
         print("[startup] centre-all error:", e)
 
     # Step 2: optional wake-up wiggle.
- 
+    if not args.no_wiggle:
+        print("[startup] wake-up wiggle: each channel 1500 -> 1580 -> 1500 ...")
+        try:
+            for ch in DEFAULT_CHANNELS:
+                arm.move(ch, 1580, time_ms=400)
+                time.sleep(0.55)
+                arm.move(ch, 1500, time_ms=400)
+                time.sleep(0.55)
+        except Exception as e:
+            print("[startup] wiggle error:", e)
+
+    listen_host = args.host
+    if listen_host == "0.0.0.0":
+        listen_host = "<pi-ip>"
+    print("[startup] ready. Open http://" + listen_host + ":" + str(args.http_port) + "/ in a browser.")
+    print("[startup] the arm will HOLD at 1500 until you move a slider.")
+
+    controller = ArmController(arm)
+    app = create_app(controller)
+    try:
+        app.run(host=args.host, port=args.http_port, debug=False, threaded=True)
+    finally:
+        controller.emergency_stop()
+        arm.close()
+
+
+if __name__ == "__main__":
+    main()
