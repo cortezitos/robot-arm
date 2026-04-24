@@ -23,17 +23,19 @@ echo "    working from: $HERE"
 echo
 
 # ---- 1. System packages --------------------------------------------------
-if ! command -v pip3 >/dev/null 2>&1; then
-    echo "==> installing python3-pip"
-    sudo apt-get update
-    sudo apt-get install -y python3-pip
-else
-    echo "==> python3-pip already installed"
-fi
+echo "==> installing system packages"
+sudo apt-get update
+sudo apt-get install -y python3-pip python3-venv
 
 # ---- 2. Python deps ------------------------------------------------------
 echo "==> installing Python dependencies"
-pip3 install --user -r "$HERE/requirements.txt"
+
+if [ ! -d "$HERE/.venv" ]; then
+    python3 -m venv "$HERE/.venv"
+fi
+
+"$HERE/.venv/bin/pip" install --upgrade pip
+"$HERE/.venv/bin/pip" install -r "$HERE/requirements.txt"
 
 # ---- 3. Serial permissions ----------------------------------------------
 if id -nG "$USER" | tr ' ' '\n' | grep -qx dialout; then
