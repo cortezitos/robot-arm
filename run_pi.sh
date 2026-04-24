@@ -28,4 +28,4 @@ else
 fi
 
 echo "[run_pi] using port $PORT"
-exec python3 webapp.py --port "$PORT" "$@"
+exec "$HERE/.venv/bin/python" webapp.py --port "$PORT" "$@"
