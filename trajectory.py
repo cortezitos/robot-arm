@@ -125,12 +125,20 @@ PICK_POSE_PULSES = {
     CH_SHOULDER: 1120,
     CH_ELBOW: 1280,
     CH_WRIST: 970,
+    CH_GRIPPER: 1000,
+}
+
+PICK_POSE_GRAB_PULSES = {
+    CH_BASE: 1690,
+    CH_SHOULDER: 1120,
+    CH_ELBOW: 1280,
+    CH_WRIST: 970,
     CH_GRIPPER: 2000,
 }
 
 PLACE_POSE_HOLD_PULSES = {
     CH_BASE: 1090,
-    CH_SHOULDER: 1310,
+    CH_SHOULDER: 1360,
     CH_ELBOW: 1470,
     CH_WRIST: 940,
     CH_GRIPPER: 2000,
@@ -138,7 +146,7 @@ PLACE_POSE_HOLD_PULSES = {
 
 PLACE_POSE_DROP_PULSES = {
     CH_BASE: 1090,
-    CH_SHOULDER: 1310,
+    CH_SHOULDER: 1360,
     CH_ELBOW: 1470,
     CH_WRIST: 940,
     CH_GRIPPER: 1000,
@@ -150,9 +158,10 @@ def pick_and_place(arm: SSC32, stop_event=None) -> List[str]:
 
     Sequence:
         1. Try to move to HOME_POSE using IK.
-        2. Move to the tuned pickup pulses and grip there (CH4=2000).
-        3. Move to the tuned place pose while still gripping.
-        4. Release at the place pose by switching CH4 to 1000.
+        2. Move to the first tuned pose with the gripper open.
+        3. Close the gripper at that same pose to grab the object.
+        4. Move to the second tuned pose while still gripping.
+        5. Release at the second pose by switching CH4 back to 1000.
     """
     if stop_event is not None and stop_event.is_set():
         return []
@@ -173,7 +182,8 @@ def pick_and_place(arm: SSC32, stop_event=None) -> List[str]:
         return ["home"]
 
     seq = [
-        PulseStep("pick", PICK_POSE_PULSES, duration_ms=1700, settle_s=0.50),
+        PulseStep("pick_open", PICK_POSE_PULSES, duration_ms=1700, settle_s=0.50),
+        PulseStep("grab", PICK_POSE_GRAB_PULSES, duration_ms=500, settle_s=0.50),
         PulseStep("carry_to_place", PLACE_POSE_HOLD_PULSES, duration_ms=1700, settle_s=0.40),
         PulseStep("drop", PLACE_POSE_DROP_PULSES, duration_ms=500, settle_s=0.60),
     ]
