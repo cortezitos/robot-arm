@@ -1,33 +1,29 @@
 """
-Cartesian trajectory helpers for the AL5B arm.
+Trajectory helpers for the AL5B arm.
 
-Two levels of planning are provided:
+Two styles are supported:
 
-1. ``move_to_pose`` — single-segment Cartesian move with trapezoidal-ish
-   timing. Internally this is just a synchronised multi-servo SSC-32 "T<ms>"
-   command, so the SSC-32 itself handles the per-servo interpolation.
+1. ``move_to_pose`` / ``follow_waypoints`` for Cartesian IK-driven moves.
+2. ``move_to_pulses`` / ``follow_pulse_steps`` for fixed servo-pulse scripts.
 
-2. ``follow_waypoints`` — a sequence of (x,y,z,pitch) waypoints and per-segment
-   durations. Useful for scripted demos like pick-and-place.
-
-For richer motion (straight-line Cartesian paths, velocity profiles) you would
-subdivide segments into sub-waypoints here and push each one to the SSC-32 at
-fixed intervals.
+The current pick-and-place demo uses a fixed pulse script because the pickup
+and drop poses have been tuned directly on the real arm.
 """
 
 from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence
 
-from ssc32_driver import SSC32, CH_GRIPPER
+from ssc32_driver import (
+    SSC32,
+    CH_BASE, CH_SHOULDER, CH_ELBOW, CH_WRIST, CH_GRIPPER,
+)
 from al5b_kinematics import (
-    JointAngles,
     inverse_kinematics,
     angles_to_pulses,
     GRIPPER_OPEN_US,
-    GRIPPER_CLOSE_US,
 )
 
 
@@ -40,6 +36,15 @@ class Waypoint:
     pitch: float = 0.0           # radians
     gripper_us: Optional[int] = None  # None = leave as-is
     duration_ms: int = 1500      # how long to take reaching this waypoint
+
+
+@dataclass
+class PulseStep:
+    """A fixed per-channel pulse target for scripted motions."""
+    name: str
+    pulses: Dict[int, int]
+    duration_ms: int = 1500
+    settle_s: float = 0.25
 
 
 def move_to_pose(arm: SSC32,
@@ -61,6 +66,24 @@ def move_to_pose(arm: SSC32,
     return True
 
 
+def _sleep_interruptible(total_s: float, stop_event=None) -> bool:
+    """Sleep in short slices so scripted motions can stop promptly."""
+    deadline = time.monotonic() + total_s
+    while time.monotonic() < deadline:
+        if stop_event is not None and stop_event.is_set():
+            return False
+        remaining = deadline - time.monotonic()
+        time.sleep(min(0.05, remaining))
+    return True
+
+
+def move_to_pulses(arm: SSC32, pulses: Dict[int, int], duration_ms: int = 1500,
+                   settle_s: float = 0.25, stop_event=None) -> bool:
+    """Move directly to a known-good set of servo pulses."""
+    arm.move_many(pulses, time_ms=duration_ms)
+    return _sleep_interruptible(duration_ms / 1000.0 + settle_s, stop_event)
+
+
 def follow_waypoints(arm: SSC32, waypoints: Sequence[Waypoint],
                      stop_event=None) -> List[bool]:
     """Run through a list of waypoints. Set stop_event to interrupt cleanly."""
@@ -76,6 +99,19 @@ def follow_waypoints(arm: SSC32, waypoints: Sequence[Waypoint],
     return results
 
 
+def follow_pulse_steps(arm: SSC32, steps: Sequence[PulseStep],
+                       stop_event=None) -> List[str]:
+    """Run through a list of pulse-script steps."""
+    executed = []
+    for step in steps:
+        if stop_event is not None and stop_event.is_set():
+            break
+        move_to_pulses(arm, step.pulses, duration_ms=step.duration_ms,
+                       settle_s=step.settle_s, stop_event=stop_event)
+        executed.append(step.name)
+    return executed
+
+
 # ---------------------------------------------------------------------------
 # Named poses — useful starting points for scripted demos.
 # Coordinates are in millimetres; the world frame has +X forward from the arm,
@@ -84,46 +120,68 @@ def follow_waypoints(arm: SSC32, waypoints: Sequence[Waypoint],
 HOME_POSE = Waypoint(x=250.0, y=0.0, z=200.0, pitch=0.0,
                      gripper_us=GRIPPER_OPEN_US, duration_ms=2000)
 
+PICK_POSE_PULSES = {
+    CH_BASE: 1690,
+    CH_SHOULDER: 1120,
+    CH_ELBOW: 1280,
+    CH_WRIST: 970,
+    CH_GRIPPER: 2000,
+}
 
-def pick_and_place(arm: SSC32,
-                   pick_xy=(280.0, 80.0),
-                   place_xy=(280.0, -80.0),
-                   table_z: float = 30.0,
-                   hover_z: float = 120.0,
-                   pitch: float = -1.2,   # ~-70 deg: tool angled down
-                   stop_event=None) -> List[Waypoint]:
-    """A simple pick-and-place demo.
+PLACE_POSE_HOLD_PULSES = {
+    CH_BASE: 1090,
+    CH_SHOULDER: 1310,
+    CH_ELBOW: 1470,
+    CH_WRIST: 940,
+    CH_GRIPPER: 2000,
+}
 
-    The arm:
-        1. goes home (arm up, gripper open)
-        2. moves above the pick point
-        3. descends to table height
-        4. closes gripper
-        5. ascends to hover height
-        6. traverses to above the place point
-        7. descends to table height
-        8. opens gripper
-        9. ascends and returns home
+PLACE_POSE_DROP_PULSES = {
+    CH_BASE: 1090,
+    CH_SHOULDER: 1310,
+    CH_ELBOW: 1470,
+    CH_WRIST: 940,
+    CH_GRIPPER: 1000,
+}
 
-    Returns the waypoint list (also useful for dry-run visualisation).
+
+def pick_and_place(arm: SSC32, stop_event=None) -> List[str]:
+    """Run the tuned pickup/drop script using fixed servo pulses.
+
+    Sequence:
+        1. Try to move to HOME_POSE using IK.
+        2. Move to the tuned pickup pulses and grip there (CH4=2000).
+        3. Move to the tuned place pose while still gripping.
+        4. Release at the place pose by switching CH4 to 1000.
     """
-    px, py = pick_xy
-    qx, qy = place_xy
+    if stop_event is not None and stop_event.is_set():
+        return []
+
+    home_ok = move_to_pose(
+        arm,
+        HOME_POSE.x,
+        HOME_POSE.y,
+        HOME_POSE.z,
+        HOME_POSE.pitch,
+        duration_ms=HOME_POSE.duration_ms,
+        gripper_us=HOME_POSE.gripper_us,
+        wait=False,
+    )
+    if not home_ok:
+        print("[demo] home pose unreachable; continuing with tuned pulse sequence")
+    elif not _sleep_interruptible(HOME_POSE.duration_ms / 1000.0 + 0.25, stop_event):
+        return ["home"]
 
     seq = [
-        HOME_POSE,
-        Waypoint(px, py, hover_z, pitch, GRIPPER_OPEN_US, 1500),
-        Waypoint(px, py, table_z, pitch, GRIPPER_OPEN_US, 1200),
-        Waypoint(px, py, table_z, pitch, GRIPPER_CLOSE_US, 600),   # close gripper
-        Waypoint(px, py, hover_z, pitch, GRIPPER_CLOSE_US, 1200),
-        Waypoint(qx, qy, hover_z, pitch, GRIPPER_CLOSE_US, 1800),
-        Waypoint(qx, qy, table_z, pitch, GRIPPER_CLOSE_US, 1200),
-        Waypoint(qx, qy, table_z, pitch, GRIPPER_OPEN_US, 600),    # release
-        Waypoint(qx, qy, hover_z, pitch, GRIPPER_OPEN_US, 1200),
-        HOME_POSE,
+        PulseStep("pick", PICK_POSE_PULSES, duration_ms=1700, settle_s=0.50),
+        PulseStep("carry_to_place", PLACE_POSE_HOLD_PULSES, duration_ms=1700, settle_s=0.40),
+        PulseStep("drop", PLACE_POSE_DROP_PULSES, duration_ms=500, settle_s=0.60),
     ]
-    follow_waypoints(arm, seq, stop_event=stop_event)
-    return list(seq)
+    executed = []
+    if home_ok:
+        executed.append("home")
+    executed.extend(follow_pulse_steps(arm, seq, stop_event=stop_event))
+    return executed
 
 
 if __name__ == "__main__":
@@ -131,8 +189,7 @@ if __name__ == "__main__":
     from ssc32_driver import FakeSSC32
     arm = FakeSSC32(verbose=False)
     arm.open()
-    wps = pick_and_place(arm)
-    print("Executed", len(wps), "waypoints on fake arm")
-    for i, w in enumerate(wps):
-        print("  {:2d} x={:+6.1f} y={:+6.1f} z={:+6.1f} pitch={:+.2f} grip={} t={}ms"
-              .format(i, w.x, w.y, w.z, w.pitch, w.gripper_us, w.duration_ms))
+    steps = pick_and_place(arm)
+    print("Executed", len(steps), "script steps on fake arm")
+    for i, step in enumerate(steps):
+        print("  {:2d} {}".format(i, step))

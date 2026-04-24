@@ -47,7 +47,6 @@ from ssc32_driver import (
 )
 from al5b_kinematics import (
     inverse_kinematics, angles_to_pulses,
-    GRIPPER_OPEN_US, GRIPPER_CLOSE_US,
 )
 from trajectory import pick_and_place, HOME_POSE
 
@@ -102,20 +101,18 @@ class ArmController:
 
     # ---- demo thread -----------------------------------------------------
 
-    def start_pick_and_place(self, pick_xy, place_xy) -> bool:
+    def start_pick_and_place(self) -> bool:
         if self._busy.is_set():
             return False
-        t = threading.Thread(target=self._run_pick_and_place,
-                             args=(pick_xy, place_xy), daemon=True)
+        t = threading.Thread(target=self._run_pick_and_place, daemon=True)
         t.start()
         return True
 
-    def _run_pick_and_place(self, pick_xy, place_xy):
+    def _run_pick_and_place(self):
         self._busy.set()
         self._stop.clear()
         try:
-            pick_and_place(self.arm, pick_xy=pick_xy, place_xy=place_xy,
-                           stop_event=self._stop)
+            pick_and_place(self.arm, stop_event=self._stop)
         finally:
             self._busy.clear()
 
@@ -188,10 +185,7 @@ def create_app(controller: ArmController) -> Flask:
 
     @app.post("/api/demo")
     def api_demo():
-        data = request.get_json(force=True, silent=True) or {}
-        pick = data.get("pick", [280.0, 80.0])
-        place = data.get("place", [280.0, -80.0])
-        started = controller.start_pick_and_place(tuple(pick), tuple(place))
+        started = controller.start_pick_and_place()
         return jsonify({"started": started})
 
     @app.post("/api/stop")

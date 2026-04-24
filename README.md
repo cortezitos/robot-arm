@@ -84,7 +84,8 @@ default lets any device on the same Wi-Fi reach the webapp.
 
 ### Step 3 — calibrate
 
-Before the IK-based **Home** and **Pick & Place** buttons work correctly:
+Before the IK-based **Home (IK)** button works correctly, and before the demo's
+initial move to home is trustworthy:
 
 1. **Servo directions.** Move each slider. Flip the sign of `us_per_rad` in
    `al5b_kinematics.py → DEFAULT_CAL` for any joint that moves the wrong way.
@@ -98,7 +99,8 @@ Before the IK-based **Home** and **Pick & Place** buttons work correctly:
    `GRIPPER_OPEN_US` / `GRIPPER_CLOSE_US`.
 
 Until calibration matches your arm, the **per-joint sliders** are the safe
-interface. The IK-based buttons may drive the arm to physically wrong poses.
+interface. Any feature that uses `HOME_POSE` may drive the arm to physically
+wrong poses.
 
 ## Auto-start on boot (optional)
 
@@ -127,7 +129,8 @@ Disable:
 - **Home (IK)** — uses inverse kinematics to reach the `HOME_POSE` defined in
   `trajectory.py`. Requires calibration to be correct.
 - **Pick & Place** — runs the scripted pick-and-place trajectory from
-  `trajectory.pick_and_place()`. Requires calibration.
+  `trajectory.pick_and_place()`. It first tries `HOME_POSE`, then uses the
+  tuned fixed pulse positions in `trajectory.py` for pickup and drop.
 - **STOP** — sends the SSC-32 native `STOP <ch>` per channel. The arm freezes
   **at its current position** — no snap back to the last target.
 
@@ -157,7 +160,7 @@ on all interfaces; you don't need to change anything in the code.
 This was an uncalibrated-IK bug in an older build. In the current version
 the webapp centres every channel at 1500 us before anything else, then waits
 for you to move a slider — the IK never runs until you click **Home (IK)**
-or **Pick & Place**, by which time your calibration edits have taken effect.
+or the demo starts its initial move to `HOME_POSE`.
 
 **STOP button slams the arm back to the last position**
 
